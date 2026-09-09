@@ -4,6 +4,34 @@
 #include "nanoflann.hpp"
 
 
+using namespace nanoflann;
+
+struct GLMVectorAdaptor {
+    const std::vector<glm::vec3>& pts;
+
+    GLMVectorAdaptor(const std::vector<glm::vec3>& pts)
+            : pts(pts) {}
+
+    inline size_t kdtree_get_point_count() const {
+        return pts.size();
+    }
+
+    inline float kdtree_get_pt(const size_t idx, const size_t dim) const {
+        return pts[idx][dim];
+    }
+
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX&) const {
+        return false;
+    }
+};
+
+using KDTree = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<float, GLMVectorAdaptor>,
+        GLMVectorAdaptor,
+        3
+>;
+
 std::vector<glm::vec3> readPointCloud(const std::string & path) {
 
     std::ifstream file(path);
@@ -16,7 +44,22 @@ std::vector<glm::vec3> readPointCloud(const std::string & path) {
     }
     return points;
 }
+void readPointCloud(
+        const std::string& path,
+        std::vector<glm::vec3>& points,
+        std::vector<glm::vec3>& normals)
+{
+    std::ifstream file(path);
 
+    double x, y, z;
+    double nx, ny, nz;
+
+    while (file >> x >> y >> z >> nx >> ny >> nz)
+    {
+        points.emplace_back(x, y, z);
+        normals.emplace_back(nx, ny, nz);
+    }
+}
 
 void callback() {
 
@@ -38,12 +81,39 @@ int main(int argc, char **argv) {
     // Initialize polyscope
     polyscope::init();
 
-    auto vec = readPointCloud("../data/points/bunny.xyz");
-    // Register the mesh with Polyscope
-    auto ps = polyscope::registerPointCloud("input ps",vec);
+
+    std::vector<glm::vec3> points;
+    std::vector<glm::vec3> normals;
+
+    readPointCloud("../data/points/points_normals/bunny.xyz", points, normals);
+    auto ps = polyscope::registerPointCloud("input ps",points);
+    ps->addVectorQuantity("normals", normals);
     ps->resetTransform();
 
+    KDTree tree(3,GLMVectorAdaptor(points), nanoflann::KDTreeSingleIndexAdaptorParams(10));
+    tree.buildIndex();
 
+    glm::vec3 query = points[0];
+
+    const size_t k = 10;
+    std::vector<size_t> indices(k);
+    std::vector<float> distances(k);
+    nanoflann::KNNResultSet<float> resultSet(k);
+    resultSet.init(indices.data(), distances.data());
+
+    tree.findNeighbors(
+            resultSet,
+            &query[0],
+            nanoflann::SearchParameters()
+    );
+
+    for (size_t j = 0; j < resultSet.size(); ++j)
+    {
+        size_t neighbor = indices[j];
+        float dist2 = distances[j];
+
+        std::cout << neighbor << "  " << dist2 << '\n';
+    }
     // Add the callback
     polyscope::state::userCallback = callback;
 
